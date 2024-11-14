@@ -1,4 +1,5 @@
-import pandas as pd
+from collections import Counter
+import csv
 import logging
 from pathlib import Path
 
@@ -28,10 +29,20 @@ def load_lookup_table(filepath):
     try:
         # Read the lookup table and ensure case insensitivity for protocol matching
         column_names = ["dstport", "protocol", "tag"]
-        lookup_table = pd.read_csv(filepath, header=None, names=column_names, dtype={'protocol': str})
-        lookup_table['protocol'] = lookup_table['protocol'].str.lower()  # Convert protocol to lowercase
-        logger.info(f"Loaded lookup table from {filepath} with {len(lookup_table)} records.")
+        lookup_table = {}
+        
+
+        with open(filepath, mode='r') as file:
+            csv_reader = csv.reader(file)
+            for row in csv_reader:
+                
+                if str(row[0])+"_"+row[1] not in lookup_table:
+                    lookup_table[str(row[0])+"_"+row[1]]=[row[2]]
+                else:
+                    set(lookup_table[str(row[0])+"_"+row[1]].append(row[2]))
+        logging.info(f"Loaded lookup table from {filepath} with {len(lookup_table)} records.")
         return lookup_table
+
     except Exception as e:
         logger.error(f"Failed to load lookup table: {e}")
         raise
@@ -44,9 +55,15 @@ def map_protocols(flow_logs):
     Returns:
         DataFrame: Flow logs with mapped protocol names.
     """
-    flow_logs['protocol'] = flow_logs['protocol'].map(protocol_mapping).fillna(flow_logs['protocol'])
-    flow_logs['protocol'] = flow_logs['protocol'].str.lower()  # Convert to lowercase for case-insensitive comparison
-    logger.info("Protocols mapped successfully.")
+    for log in flow_logs:
+        # Map the protocol number to its string name if it exists in protocol_mapping
+        protocol = log.get('protocol')
+        if isinstance(protocol, int) and protocol in protocol_mapping:
+            log['protocol'] = protocol_mapping[protocol].lower()
+        elif isinstance(protocol, str):
+            log['protocol'] = protocol.lower()  # Ensure lowercase for string protocols
+            
+    logging.info("Protocols mapped successfully.")
     return flow_logs
 
 def tag_flow_logs(flow_logs, lookup_table):
@@ -59,18 +76,35 @@ def tag_flow_logs(flow_logs, lookup_table):
         DataFrame: DataFrame with a 'tag' column added, where unmatched entries are labeled 'Untagged'.
     """
     # Map protocol numbers to strings
-    flow_logs = map_protocols(flow_logs)
+    #flow_logs = map_protocols(flow_logs)
     
     # Ensure dstport and protocol columns are strings for consistent merging
     #flow_logs['dstport'] = flow_logs['dstport'].astype(str)
     #flow_logs['protocol'] = flow_logs['protocol'].astype(str)
     
     # Merge flow logs with lookup table on `dstport` and `protocol` columns
-    tagged_logs = flow_logs.merge(lookup_table, on=['dstport', 'protocol'], how='left')
-    tagged_logs['tag'].fillna('Untagged', inplace=True)
+    for log in flow_logs:
+        # Convert protocol to lowercase for consistency
+        log['protocol'] = str(log['protocol']).lower()
+        
+        # Generate a combined key of dstport and protocol for lookup
+        lookup_key = f"{log['dstport']}_{log['protocol']}"
+        
+        # Tagging process: check if the combined key is in the lookup table
+        if lookup_key in lookup_table:
+            log['tag'] = lookup_table[lookup_key]
+        else:
+            log['tag'] = ['Untagged']  # Default tag if no match found
     
-    logger.info("Flow logs tagged successfully.")
-    return tagged_logs
+    logging.info("Flow logs tagged successfully.")
+    return flow_logs
+        # if match:
+        #     log['tag'] = match['tag']
+        # else:
+        #     log['tag'] = 'Untagged'  # Default tag if no match found
+
+    # logging.info("Flow logs tagged successfully.")
+    # return flow_logs
 
 def count_tags(tagged_logs):
     """
@@ -81,15 +115,27 @@ def count_tags(tagged_logs):
         DataFrame: A DataFrame with tag counts.
     """
     try:
-        tag_counts = tagged_logs['tag'].value_counts().reset_index()
-        tag_counts.columns = ['Tag', 'Count']
-        logger.info("Successfully counted tags.")
-        return tag_counts
+        # Extract tags from each log entry
+        #tags = [log['tag'] for log in tagged_logs if 'tag' in log]
+        tags=[]
+        for log in tagged_logs:
+            #print("log:",log)
+            if 'tag' in log:
+                for tag in log['tag']:
+                    tags.append(tag)
+        # Count occurrences of each tag using Counter
+        tag_counts = Counter(tags)
+        
+        # Convert the counter to a list of dictionaries with 'Tag' and 'Count' keys
+        tag_counts_list = [{'Tag': tag, 'Count': count} for tag, count in tag_counts.items()]
+        
+        logging.info("Successfully counted tags.")
+        return tag_counts_list
     except KeyError:
-        logger.error("The 'tag' column is missing in the tagged logs DataFrame.")
+        logging.error("The 'tag' field is missing in one or more entries in tagged logs.")
         raise
     except Exception as e:
-        logger.error(f"An error occurred while counting tags: {e}")
+        logging.error(f"An error occurred while counting tags: {e}")
         raise
 
 def save_tag_counts(tag_counts, output_filepath):
@@ -100,10 +146,15 @@ def save_tag_counts(tag_counts, output_filepath):
         output_filepath (str): Path to save the output CSV file.
     """
     try:
-        tag_counts.to_csv(output_filepath, index=False)
-        logger.info(f"Tag counts saved to {output_filepath}")
+        # Write tag counts to CSV
+        with open(output_filepath, mode='w', newline='') as file:
+            writer = csv.DictWriter(file, fieldnames=['Tag', 'Count'])
+            writer.writeheader()  # Write the header
+            writer.writerows(tag_counts)  # Write the data rows
+            
+        logging.info(f"Tag counts saved to {output_filepath}")
     except Exception as e:
-        logger.error(f"Failed to save tag counts to file: {e}")
+        logging.error(f"Failed to save tag counts to file: {e}")
         raise
 
 def process_logs_in_chunks(flow_logs_file_path, lookup_table):
@@ -115,22 +166,67 @@ def process_logs_in_chunks(flow_logs_file_path, lookup_table):
     Returns:
         DataFrame: Tagged flow logs.
     """
-    chunk_size = 100000  # Define a chunk size suitable for your memory
+    column_names = ["version", "account_id", "interface_id", "srcaddr", "dstaddr", 
+                    "dstport", "srcport", "protocol", "packets", "bytes", 
+                    "start", "end", "action", "log_status"]
     chunk_list = []
+
+    with open(flow_logs_file_path, mode='r') as file:
+        csv_reader = csv.reader(file, delimiter=' ')
+        current_chunk = []
+        chunk_size = 100000
+        for row in csv_reader:
+            # Filter out any empty strings caused by multiple spaces
+            row = [value for value in row if value]
+            
+            # Convert each row into a dictionary using column names
+            if len(row) == len(column_names):
+                flow_log = {
+                    column_names[i]: (
+                        protocol_mapping[int(row[i])] if column_names[i] == "protocol" and int(row[i]) in protocol_mapping
+                        else row[i]
+                    ) for i in range(len(column_names))
+                }
+                current_chunk.append(flow_log)
+            # When chunk size is reached, process the chunk
+            if len(current_chunk) >= chunk_size:
+                tagged_chunk = tag_flow_logs(current_chunk, lookup_table)
+                chunk_list.extend(tagged_chunk)
+                current_chunk = []  # Reset the chunk
+
+        # Process any remaining records in the final chunk
+        if current_chunk:
+            tagged_chunk = tag_flow_logs(current_chunk, lookup_table)
+            chunk_list.extend(tagged_chunk)
+
+    logging.info(f"Processed {len(chunk_list)} total flow logs.")
+    return chunk_list
+
+def count_port_protocol_combinations(tagged_logs, output_filepath):
+    """
+    Count occurrences of (dstport, protocol) combinations in tagged logs and save to a CSV file.
     
-    for chunk in pd.read_csv(flow_logs_file_path, sep=r'\s+', header=None, chunksize=chunk_size):
-        column_names = ["version", "account_id", "interface_id", "srcaddr", "dstaddr", 
-                        "dstport", "srcport", "protocol", "packets", "bytes", 
-                        "start", "end", "action", "log_status"]
-        chunk.columns = column_names
+    Args:
+        tagged_logs (list): List of dictionaries, each containing 'dstport' and 'protocol' keys.
+        output_filepath (str): Path to save the CSV file.
+    """
+   
+    protocol_map = {6: 'tcp', 1: 'icmp', 17: 'udp'}
+    counts = Counter((str(log['dstport']), protocol_map.get(log['protocol'], str(log['protocol'])).lower())
+                     for log in tagged_logs)
+
+    port_protocol_counts = [{'dstport': dstport, 'protocol': protocol, 'count': count} 
+                            for (dstport, protocol), count in counts.items()]
+
+    try:
+        with open(output_filepath, mode='w', newline='') as file:
+            writer = csv.DictWriter(file, fieldnames=['dstport', 'protocol', 'count'])
+            writer.writeheader()
+            writer.writerows(port_protocol_counts)
         
-        # Tag the flow logs in the current chunk
-        tagged_chunk = tag_flow_logs(chunk, lookup_table)
-        chunk_list.append(tagged_chunk)
-    
-    # Concatenate all the chunks into a single DataFrame
-    tagged_logs = pd.concat(chunk_list, ignore_index=True)
-    logger.info(f"Processed {len(tagged_logs)} total flow logs.")
-    return tagged_logs
+        logging.info(f"Port-protocol counts saved to {output_filepath}")
+    except Exception as e:
+        logging.error(f"Failed to save port-protocol counts to file: {e}")
+        raise
 
 

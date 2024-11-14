@@ -36,15 +36,15 @@ def main():
         
         # Optional: Generate additional summary stats (e.g., protocol counts)
         logger.info("Generating port-protocol counts...")
-        port_protocol_counts = tagged_logs.groupby(['dstport', 'protocol']).size().reset_index(name='count')
-        
+        #port_protocol_counts = tagged_logs.groupby(['dstport', 'protocol']).size().reset_index(name='count')
+        fp.count_port_protocol_combinations(tagged_logs,port_protocol_file_path)
         # Map protocol numbers to names (e.g., 6 -> tcp)
-        protocol_map = {6: 'tcp', 1: 'icmp', 17: 'udp'}
-        port_protocol_counts['protocol'] = port_protocol_counts['protocol'].map(protocol_map)
+       # protocol_map = {6: 'tcp', 1: 'icmp', 17: 'udp'}
+        #port_protocol_counts['protocol'] = port_protocol_counts['protocol'].map(protocol_map)
 
         # Save port-protocol count data to CSV
-        logger.info(f"Saving port-protocol counts to {port_protocol_file_path}...")
-        port_protocol_counts.to_csv(port_protocol_file_path, index=False, header=True)
+        #logger.info(f"Saving port-protocol counts to {port_protocol_file_path}...")
+        #port_protocol_counts.to_csv(port_protocol_file_path, index=False, header=True)
         logger.info(f"Port-protocol counts saved to {port_protocol_file_path}.")
     
     except FileNotFoundError as e:
