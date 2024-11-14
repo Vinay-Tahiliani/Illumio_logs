@@ -34,8 +34,8 @@ No external libraries (such as pandas) are required to run this code.
 To get started, clone the repository to your local machine:
 
 ```bash
-git clone https://github.com/your-username/flow-log-processing.git
-cd flow-log-processing
+git clone https://github.com/Vinay-Tahiliani/Illumio_logs.git
+cd Illumio_logs
 python .\main.py
 ```
 
