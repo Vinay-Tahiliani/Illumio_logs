@@ -78,10 +78,6 @@ def tag_flow_logs(flow_logs, lookup_table):
     # Map protocol numbers to strings
     #flow_logs = map_protocols(flow_logs)
     
-    # Ensure dstport and protocol columns are strings for consistent merging
-    #flow_logs['dstport'] = flow_logs['dstport'].astype(str)
-    #flow_logs['protocol'] = flow_logs['protocol'].astype(str)
-    
     # Merge flow logs with lookup table on `dstport` and `protocol` columns
     for log in flow_logs:
         # Convert protocol to lowercase for consistency
@@ -98,13 +94,6 @@ def tag_flow_logs(flow_logs, lookup_table):
     
     logging.info("Flow logs tagged successfully.")
     return flow_logs
-        # if match:
-        #     log['tag'] = match['tag']
-        # else:
-        #     log['tag'] = 'Untagged'  # Default tag if no match found
-
-    # logging.info("Flow logs tagged successfully.")
-    # return flow_logs
 
 def count_tags(tagged_logs):
     """
